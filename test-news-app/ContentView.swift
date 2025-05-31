@@ -1,85 +1,20 @@
 import SwiftUI
 
-struct NewsCard: Identifiable {
-    let id = UUID()
-    let title: String
-    let date: Date
-    let topics: [String]
-    let imageURL: URL?
-    let content: String // Added for detail view
-}
-
 struct ContentView: View {
     // Available topics for filtering
     let availableTopics = ["AI", "Tech", "Finance", "China"]
-    @State private var selectedTopics: Set<String> = []
-    
-    // Sample data - replaced with expanded data including content
-    @State private var newsCards: [NewsCard] = [
-        NewsCard(
-            title: "AI Breakthrough Enables Real-Time Language Translation",
-            date: Date().addingTimeInterval(-3600 * 5), // 5 hours ago
-            topics: ["AI", "Tech"],
-            imageURL: URL(string: "https://picsum.photos/400/300?random=1"),
-            content: """
-            Researchers at DeepMind have developed a new AI model that can translate between languages in real-time with near-human accuracy. The system, called Universal Translator, uses a novel neural architecture that processes speech directly without first converting to text.
-            
-            "This represents a significant leap forward in machine translation," said Dr. Sarah Chen, lead researcher on the project. "Our model achieves 98.7% accuracy on standardized tests, outperforming previous state-of-the-art systems by 15%."
-            
-            The technology could revolutionize global communication, making real-time translation seamless in video calls, international conferences, and even casual conversations between people speaking different languages. Early adopters include the United Nations and several multinational corporations.
-            """
-        ),
-        NewsCard(
-            title: "Global Climate Summit Reaches Historic Agreement",
-            date: Date().addingTimeInterval(-3600 * 24), // 1 day ago
-            topics: ["Finance", "China"],
-            imageURL: URL(string: "https://picsum.photos/400/300?random=2"),
-            content: """
-            After two weeks of intense negotiations, world leaders at the COP28 climate summit in Dubai have reached a landmark agreement to accelerate emissions reductions. The deal includes unprecedented commitments from both developed and developing nations.
-            
-            Key provisions of the agreement include:
-            - Phasing out coal power by 2040 in developed countries and 2050 in developing nations
-            - $100 billion annual climate finance package to help vulnerable countries adapt
-            - Methane emissions cuts of 30% by 2030
-            - Commitment to net-zero emissions by 2060 from China and India
-            
-            "This is the most significant step forward in global climate cooperation since the Paris Agreement," said UN Secretary-General António Guterres.
-            """
-        ),
-        NewsCard(
-            title: "New Study Reveals Benefits of Mediterranean Diet",
-            date: Date().addingTimeInterval(-3600 * 48), // 2 days ago
-            topics: ["Tech", "Finance"],
-            imageURL: URL(string: "https://picsum.photos/400/300?random=3"),
-            content: """
-            A comprehensive 10-year study published in the New England Journal of Medicine has confirmed significant health benefits from following a Mediterranean diet. The research followed over 25,000 participants across 12 countries.
-            
-            Key findings include:
-            - 30% reduction in cardiovascular events
-            - 24% lower risk of developing type 2 diabetes
-            - 15% reduction in overall mortality
-            - Improved cognitive function in older adults
-            
-            "The evidence is now overwhelming," said Dr. Elena Papadakis, lead author. "This eating pattern rich in olive oil, nuts, fish, and vegetables provides benefits that no single supplement or medication can match."
-            
-            The study also found economic benefits, with Mediterranean diet followers spending 23% less on healthcare over the study period.
-            """
-        )
-    ]
-    
-    // State for navigation to detail view
+    @StateObject private var viewModel = NewsViewModel()
     @State private var selectedCard: NewsCard?
-    
-    // Computed property to filter cards based on selected topics
-    var filteredCards: [NewsCard] {
-        if selectedTopics.isEmpty {
-            return newsCards
-        } else {
-            return newsCards.filter { card in
-                !Set(card.topics).isDisjoint(with: selectedTopics)
-            }
-        }
-    }
+       
+       var filteredCards: [NewsCard] {
+           if viewModel.selectedTopics.isEmpty {
+               return viewModel.newsCards
+           } else {
+               return viewModel.newsCards.filter { card in
+                   !Set(card.topics).isDisjoint(with: viewModel.selectedTopics)
+               }
+           }
+       }
     
     var body: some View {
         NavigationView {
@@ -89,10 +24,10 @@ struct ContentView: View {
                     HStack(spacing: 12) {
                         ForEach(availableTopics, id: \.self) { topic in
                             Button(action: {
-                                if selectedTopics.contains(topic) {
-                                    selectedTopics.remove(topic)
+                                if viewModel.selectedTopics.contains(topic) {
+                                    viewModel.selectedTopics.remove(topic)
                                 } else {
-                                    selectedTopics.insert(topic)
+                                    viewModel.selectedTopics.insert(topic)
                                 }
                             }) {
                                 Text(topic)
@@ -101,12 +36,12 @@ struct ContentView: View {
                                     .padding(.horizontal, 16)
                                     .padding(.vertical, 8)
                                     .background(
-                                        selectedTopics.contains(topic)
+                                        viewModel.selectedTopics.contains(topic)
                                         ? Color.blue
                                         : Color(.systemGray5)
                                     )
                                     .foregroundColor(
-                                        selectedTopics.contains(topic)
+                                        viewModel.selectedTopics.contains(topic)
                                         ? .white
                                         : .primary
                                     )
@@ -130,11 +65,26 @@ struct ContentView: View {
                                     .padding(.horizontal)
                             }
                             .buttonStyle(PlainButtonStyle())
+                            .onAppear {
+                                    // Load more content when reaching the end
+                                    if card.id == filteredCards.last?.id {
+                                            Task {
+                                                await viewModel.loadMoreNews()
+                                            }
+                                    }
+                            }
+                        }
+                        if viewModel.isLoading {
+                                    ProgressView()
+                                .padding()
                         }
                     }
                     .padding(.vertical)
                 }
                 .background(Color(.systemGroupedBackground))
+                .refreshable {
+                    await viewModel.loadInitialData()
+                }
             }
             .navigationTitle("Fragments")
             .background(Color(.systemGroupedBackground))
@@ -142,6 +92,13 @@ struct ContentView: View {
             .sheet(item: $selectedCard) { card in
                 NewsDetailView(card: card)
             }
+            .alert("Error", isPresented: .constant(viewModel.error != nil)) {
+                           Button("OK") {
+                               viewModel.error = nil
+                           }
+                       } message: {
+                           Text(viewModel.error ?? "")
+                   }
         }
     }
 }
@@ -154,7 +111,7 @@ struct NewsCardView: View {
         VStack(alignment: .leading, spacing: 8) {
             // Background Image with overlay
             ZStack(alignment: .bottomLeading) {
-                AsyncImage(url: card.imageURL) { image in
+                AsyncImage(url: URL(string: card.imageUrl ?? "")) { image in
                     image
                         .resizable()
                         .aspectRatio(16/9, contentMode: .fill)
@@ -180,9 +137,9 @@ struct NewsCardView: View {
                 // Date and Topics at bottom
                 VStack(alignment: .leading, spacing: 4) {
                     // Formatted date
-                    Text(card.date.formatted(.relative(presentation: .named)))
-                        .font(.caption)
-                        .foregroundColor(.white)
+                     Text(formatRelativeDate(card.date))
+                         .font(.caption)
+                         .foregroundColor(.white)
                     
                     // Topics/tags
                     HStack {
@@ -226,7 +183,7 @@ struct NewsDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 // Header Image
-                AsyncImage(url: card.imageURL) { image in
+                AsyncImage(url: URL(string: card.imageUrl ?? "")) { image in
                     image
                         .resizable()
                         .aspectRatio(16/9, contentMode: .fill)
@@ -250,9 +207,10 @@ struct NewsDetailView: View {
                             .fontWeight(.bold)
                         
                         HStack {
-                            Text(card.date.formatted(date: .abbreviated, time: .shortened))
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
+                            // Formatted date
+                             Text(formatRelativeDate(card.date))
+                                 .font(.caption)
+                                 .foregroundColor(.white)
                             
                             Spacer()
                             
@@ -272,7 +230,7 @@ struct NewsDetailView: View {
                     }
                     
                     // Content
-                    Text(card.content)
+                    Text(card.content ?? "")
                         .font(.custom("Charter", size: 18))
                         .lineSpacing(6)
                         .fixedSize(horizontal: false, vertical: true)
@@ -311,3 +269,42 @@ struct ContentView_Previews: PreviewProvider {
         ))
     }
 }
+
+// 辅助函数来格式化日期
+private func formatRelativeDate(_ dateString: String) -> String {
+     let formatter = ISO8601DateFormatter()
+     if let date = formatter.date(from: dateString) {
+         let calendar = Calendar.current
+         let now = Date()
+         
+         // 如果是今天
+         if calendar.isDateInToday(date) {
+             let diff = calendar.dateComponents([.hour, .minute], from: date, to: now)
+             if let hours = diff.hour, hours > 0 {
+                 return "\(hours)h ago"
+             } else if let minutes = diff.minute {
+                 return "\(max(minutes, 1))m ago"
+             }
+         }
+         
+         // 如果是昨天
+         if calendar.isDateInYesterday(date) {
+             return "Yesterday"
+         }
+         
+         // 如果是本周
+         let weekDiff = calendar.dateComponents([.weekOfYear], from: date, to: now)
+         if weekDiff.weekOfYear == 0 {
+             let dateFormatter = DateFormatter()
+             dateFormatter.dateFormat = "EEEE" // Full day name
+             return dateFormatter.string(from: date)
+         }
+         
+         // 其他情况
+         let dateFormatter = DateFormatter()
+         dateFormatter.dateStyle = .medium
+         dateFormatter.timeStyle = .none
+         return dateFormatter.string(from: date)
+     }
+     return dateString // 如果解析失败，返回原始字符串
+ }
