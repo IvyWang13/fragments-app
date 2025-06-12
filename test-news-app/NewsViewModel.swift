@@ -20,6 +20,7 @@ class NewsViewModel: ObservableObject {
     }
     
     func loadInitialData() async {
+        print("loadInitialData")
         isLoading = true
         error = nil
         
@@ -44,6 +45,8 @@ class NewsViewModel: ObservableObject {
     }
     
     func loadMoreNews() async {
+        print("loadMoreNews")
+
         guard !isLoading else { return }
         
         isLoading = true
@@ -75,4 +78,17 @@ class NewsViewModel: ObservableObject {
             await loadInitialData()
         }
     }
+    
+    func loadNewsWithTags(_ tags: Set<String>) async {
+        // This would be your API call with tag filtering
+        // For now, using the existing load method
+        await loadInitialData()
+    }
+    
+    func loadMoreNewsWithTags(_ tags: Set<String>) async {
+        // This would be your API call for pagination with tag filtering
+        // For now, using the existing load method
+        await loadMoreNews()
+    }
 }
+

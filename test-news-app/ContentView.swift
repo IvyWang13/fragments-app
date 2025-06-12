@@ -1,109 +1,166 @@
 import SwiftUI
 
 struct ContentView: View {
-    // Available topics for filtering
-    let availableTopics = ["AI", "Tech", "Finance", "China"]
-    @StateObject private var viewModel = NewsViewModel()
-    @State private var selectedCard: NewsCard?
-       
-       var filteredCards: [NewsCard] {
-           if viewModel.selectedTopics.isEmpty {
-               return viewModel.newsCards
-           } else {
-               return viewModel.newsCards.filter { card in
-                   !Set(card.topics).isDisjoint(with: viewModel.selectedTopics)
-               }
-           }
-       }
+    @StateObject private var viewModel: NewsViewModel
+    @StateObject private var tagManager: TagManager
+    @State private var showingProfile = false
+   
+    init() {
+        let newsVM = NewsViewModel()
+        self._viewModel = StateObject(wrappedValue: newsVM)
+        self._tagManager = StateObject(wrappedValue: TagManager(newsViewModel: newsVM))
+    }
     
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
-                // Topic Filter Section
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        ForEach(availableTopics, id: \.self) { topic in
-                            Button(action: {
-                                if viewModel.selectedTopics.contains(topic) {
-                                    viewModel.selectedTopics.remove(topic)
-                                } else {
-                                    viewModel.selectedTopics.insert(topic)
+                        HStack(spacing: 12) {
+                            ForEach(viewModel.availableTopics, id: \.self) { topic in
+                                Button(action: {
+                                    viewModel.toggleTopic(topic)
+                                }) {
+                                    Text(topic)
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+                                        .padding(.horizontal, 16)
+                                        .padding(.vertical, 8)
+                                        .background(
+                                            viewModel.selectedTopics.contains(topic)
+                                            ? Color.blue
+                                            : Color(.systemGray5)
+                                        )
+                                        .foregroundColor(
+                                            viewModel.selectedTopics.contains(topic)
+                                            ? .white
+                                            : .primary
+                                        )
+                                        .cornerRadius(20)
                                 }
-                            }) {
-                                Text(topic)
-                                    .font(.subheadline)
-                                    .fontWeight(.medium)
-                                    .padding(.horizontal, 16)
-                                    .padding(.vertical, 8)
-                                    .background(
-                                        viewModel.selectedTopics.contains(topic)
-                                        ? Color.blue
-                                        : Color(.systemGray5)
-                                    )
-                                    .foregroundColor(
-                                        viewModel.selectedTopics.contains(topic)
-                                        ? .white
-                                        : .primary
-                                    )
-                                    .cornerRadius(20)
                             }
                         }
+                        .padding(.horizontal)
                     }
-                    .padding(.horizontal)
-                }
-                .padding(.vertical, 12)
-                .background(Color(.systemGroupedBackground))
+                    .padding(.vertical, 12)
+                    .background(Color(.systemGroupedBackground))
                 
-                // News Cards
-                ScrollView {
-                    LazyVStack(spacing: 20) {
-                        ForEach(filteredCards) { card in
-                            Button(action: {
-                                selectedCard = card
-                            }) {
-                                NewsCardView(card: card)
-                                    .padding(.horizontal)
-                            }
-                            .buttonStyle(PlainButtonStyle())
-                            .onAppear {
-                                    // Load more content when reaching the end
-                                    if card.id == filteredCards.last?.id {
-                                            Task {
-                                                await viewModel.loadMoreNews()
-                                            }
-                                    }
-                            }
-                        }
-                        if viewModel.isLoading {
-                                    ProgressView()
-                                .padding()
-                        }
+                
+                // News Cards with loading states
+                if viewModel.isLoading && viewModel.newsCards.isEmpty {
+                    // Initial loading state
+                    VStack {
+                        ProgressView()
+                            .scaleEffect(1.2)
+                        Text("Loading fragments...")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .padding(.top, 8)
                     }
-                    .padding(.vertical)
-                }
-                .background(Color(.systemGroupedBackground))
-                .refreshable {
-                    await viewModel.loadInitialData()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let error = viewModel.error {
+                    // Error state
+                    VStack {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 40))
+                            .foregroundColor(.orange)
+                        Text("Error loading fragments")
+                            .font(.headline)
+                            .padding(.top, 8)
+                        Text(error)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
+                        Button("Retry") {
+                            Task {
+                                await viewModel.loadNewsWithTags(tagManager.selectedTagNames)
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .padding(.top, 16)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    // News Cards - now filtered based on selected tags
+                    ScrollView {
+                        LazyVStack(spacing: 20) {
+                            ForEach(filteredNewsCards()) { card in
+                                NavigationLink(destination: NewsDetailView(card: card)) {
+                                    NewsCardView(card: card)
+                                        .padding(.horizontal)
+                                }
+                                .buttonStyle(PlainButtonStyle())
+                                .onAppear {
+                                    // Load more when approaching the end
+                                    if card.id == viewModel.newsCards.last?.id {
+                                        Task {
+                                            await viewModel.loadMoreNewsWithTags(tagManager.selectedTagNames)
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Loading indicator for pagination
+                            if viewModel.isLoading && !viewModel.newsCards.isEmpty {
+                                HStack {
+                                    ProgressView()
+                                        .scaleEffect(0.8)
+                                    Text("Loading more...")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                .padding()
+                            }
+                        }
+                        .padding(.vertical)
+                    }
+                    .background(Color(.systemGroupedBackground))
                 }
             }
             .navigationTitle("Fragments")
             .background(Color(.systemGroupedBackground))
-            // Navigation link to detail view
-            .sheet(item: $selectedCard) { card in
-                NewsDetailView(card: card)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: {
+                        showingProfile = true
+                    }) {
+                        Image(systemName: "person.circle")
+                            .font(.title2)
+                    }
+                }
             }
-            .alert("Error", isPresented: .constant(viewModel.error != nil)) {
-                           Button("OK") {
-                               viewModel.error = nil
-                           }
-                       } message: {
-                           Text(viewModel.error ?? "")
-                   }
+            .sheet(isPresented: $showingProfile) {
+                ProfileView()
+            }
+            .onAppear {
+                // Load news based on selected tags when view appears
+                Task {
+                    await viewModel.loadNewsWithTags(tagManager.selectedTagNames)
+                }
+            }
+            .onChange(of: tagManager.selectedTags) { _ in
+                // Reload news when tags change
+                Task {
+                    await viewModel.loadNewsWithTags(tagManager.selectedTagNames)
+                }
+            }
+        }
+    }
+    
+    // Filter news cards based on selected tags
+    private func filteredNewsCards() -> [NewsCard] {
+        guard !tagManager.selectedTags.isEmpty else {
+            return viewModel.newsCards
+        }
+        
+        return viewModel.newsCards.filter { card in
+            let cardTopics = Set(card.topics.map { $0.lowercased() })
+            return !cardTopics.isDisjoint(with: tagManager.selectedTagNames)
         }
     }
 }
 
-// add function to optionally hide the topics filter. by default , do not expand it.
+
 struct NewsCardView: View {
     let card: NewsCard
     
@@ -111,10 +168,13 @@ struct NewsCardView: View {
         VStack(alignment: .leading, spacing: 8) {
             // Background Image with overlay
             ZStack(alignment: .bottomLeading) {
-                AsyncImage(url: URL(string: card.imageUrl ?? "")) { image in
+                // Image with placeholder using AsyncImage (iOS 15+)
+                AsyncImage(url: URL(string: card.imageUrl)) { image in
                     image
                         .resizable()
-                        .aspectRatio(16/9, contentMode: .fill)
+                        .aspectRatio(contentMode: .fill)
+                        .frame(height: 250)
+                        .clipped()
                 } placeholder: {
                     Rectangle()
                         .foregroundColor(.gray.opacity(0.3))
@@ -123,8 +183,9 @@ struct NewsCardView: View {
                                 .foregroundColor(.gray)
                                 .font(.system(size: 30))
                         )
+                        .frame(height: 250)
                 }
-                .frame(height: 250)
+                .frame(maxWidth: .infinity, maxHeight: 250)
                 .clipped()
                 
                 // Gradient overlay for better text visibility
@@ -137,9 +198,9 @@ struct NewsCardView: View {
                 // Date and Topics at bottom
                 VStack(alignment: .leading, spacing: 4) {
                     // Formatted date
-                     Text(formatRelativeDate(card.date))
-                         .font(.caption)
-                         .foregroundColor(.white)
+                    Text(card.dateObject.formatted(.relative(presentation: .named)))
+                        .font(.caption)
+                        .foregroundColor(.white)
                     
                     // Topics/tags
                     HStack {
@@ -166,6 +227,7 @@ struct NewsCardView: View {
                 .lineLimit(3)
                 .padding(.horizontal, 12)
                 .padding(.bottom, 16)
+                .foregroundColor(.primary) // Ensure proper text color for navigation
         }
         .background(Color(.systemBackground).opacity(0.6))
         .cornerRadius(12)
@@ -181,75 +243,174 @@ struct NewsDetailView: View {
     
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // Header Image
-                AsyncImage(url: URL(string: card.imageUrl ?? "")) { image in
+            VStack(alignment: .leading, spacing: 16) {
+                // Hero Image
+                AsyncImage(url: URL(string: card.imageUrl)) { image in
                     image
                         .resizable()
-                        .aspectRatio(16/9, contentMode: .fill)
+                        .aspectRatio(contentMode: .fill)
+                        .frame(height: 300)
+                        .clipped()
                 } placeholder: {
                     Rectangle()
                         .foregroundColor(.gray.opacity(0.3))
                         .overlay(
                             Image(systemName: "photo")
                                 .foregroundColor(.gray)
-                                .font(.system(size: 30))
+                                .font(.system(size: 40))
                         )
+                        .frame(height: 300)
                 }
-                .frame(height: 250)
+                .frame(maxWidth: .infinity, maxHeight: 300)
                 .clipped()
                 
                 VStack(alignment: .leading, spacing: 16) {
-                    // Title and Date
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(card.title)
-                            .font(.custom("Charter", size: 28))
-                            .fontWeight(.bold)
+                    // Title
+                    Text(card.title)
+                        .font(.custom("Charter", size: 28))
+                        .fontWeight(.bold)
+                        .lineLimit(nil)
+                    
+                    // Date and Topics
+                    HStack {
+                        Text(card.dateObject.formatted(.dateTime.day().month().year()))
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
                         
-                        HStack {
-                            // Formatted date
-                             Text(formatRelativeDate(card.date))
-                                 .font(.caption)
-                                 .foregroundColor(.white)
-                            
-                            Spacer()
-                            
-                            // Topics/tags
-                            HStack {
+                        Spacer()
+                        
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
                                 ForEach(card.topics, id: \.self) { topic in
                                     Text(topic)
                                         .font(.caption)
                                         .padding(.horizontal, 8)
                                         .padding(.vertical, 4)
-                                        .background(Color.blue.opacity(0.2))
-                                        .cornerRadius(4)
+                                        .background(Color.blue.opacity(0.1))
                                         .foregroundColor(.blue)
+                                        .cornerRadius(8)
                                 }
                             }
+                            .padding(.horizontal, 1)
                         }
                     }
                     
-                    // Content
-                    Text(card.content ?? "")
+                    Divider()
+                    
+                    // Summary
+                    Text(card.summary)
                         .font(.custom("Charter", size: 18))
-                        .lineSpacing(6)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .foregroundColor(.secondary)
+                        .lineLimit(nil)
+                    
+                    // Content
+                    Text(card.summary)
+                        .font(.custom("Charter", size: 16))
+                        .lineLimit(nil)
+                        .lineSpacing(4)
+                    
+                    // References Section
+                    if !card.references.isEmpty {
+                        VStack(alignment: .leading, spacing: 16) {
+                            HStack {
+                                Text("Sources")
+                                    .font(.headline)
+                                    .fontWeight(.semibold)
+                                
+                                Spacer()
+                                
+                                Text("\(card.references.count) reference\(card.references.count == 1 ? "" : "s")")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            
+                            LazyVStack(spacing: 12) {
+                                ForEach(card.references) { reference in
+                                    ReferenceView(reference: reference)
+                                }
+                            }
+                        }
+                        .padding(.top, 8)
+                    }
+                    
+                    // Bottom padding for better scrolling experience
+                    Color.clear
+                        .frame(height: 20)
                 }
                 .padding(.horizontal)
             }
-            .padding(.bottom)
         }
         .navigationTitle("Article")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button(action: {
-                    // Share action would go here
-                }) {
-                    Image(systemName: "square.and.arrow.up")
+    }
+}
+
+struct ReferenceView: View {
+    let reference: Reference
+    
+    var body: some View {
+        Button(action: {
+            // Open URL in Safari
+            if let url = URL(string: reference.url) {
+                UIApplication.shared.open(url)
+            }
+        }) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text(reference.source)
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundColor(.blue)
+                    
+                    Spacer()
+                    
+                    Text(reference.dateObject.formatted(.dateTime.day().month()))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                
+                Text(reference.title)
+                    .font(.footnote)
+                    .lineLimit(nil)
+                    .multilineTextAlignment(.leading)
+                    .foregroundColor(.primary)
+                
+                HStack {
+                    Image(systemName: "link")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    
+                    Text(reference.url)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    
+                    Spacer()
+                    
+                    Image(systemName: "arrow.up.right")
+                        .font(.caption2)
+                        .foregroundColor(.blue)
                 }
             }
         }
+        .buttonStyle(PlainButtonStyle())
+        .padding(16)
+        .background(Color(.systemBackground))
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.primary.opacity(0.1), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
+    }
+}
+
+// Extension to handle date formatting for Reference
+extension Reference {
+    var dateObject: Date {
+        let formatter = ISO8601DateFormatter()
+        return formatter.date(from: date) ?? Date()
     }
 }
 
@@ -259,52 +420,30 @@ struct ContentView_Previews: PreviewProvider {
         ContentView()
             .preferredColorScheme(.light)
         
-        // Also preview the detail view
         NewsDetailView(card: NewsCard(
-            title: "Sample News Article",
-            date: Date(),
-            topics: ["Tech", "AI"],
-            imageURL: URL(string: "https://picsum.photos/400/300?random=4"),
-            content: "This is a sample news article content that would appear in the detail view. It contains all the details and information about the news story that was summarized in the card view."
+            id: "preview_1",
+            title: "AI Breakthrough Enables Real-Time Language Translation",
+            summary: "Revolutionary AI system achieves unprecedented accuracy in real-time translation across 40 languages, potentially transforming global communication and breaking down language barriers worldwide.",
+            imageUrl: "https://picsum.photos/400/300?random=1",
+            date: "2025-06-02T10:00:00Z",
+            topics: ["AI", "Tech"],
+            references: [
+                Reference(
+                    id: "ref_1",
+                    url: "https://example.com/ai-news",
+                    source: "TechCrunch",
+                    title: "AI Translation Breakthrough Announced",
+                    date: "2025-06-02T09:00:00Z"
+                ),
+                Reference(
+                    id: "ref_2",
+                    url: "https://example.com/ai-research",
+                    source: "Nature",
+                    title: "Neural Networks Achieve Human-Level Translation",
+                    date: "2025-06-02T08:30:00Z"
+                )
+            ]
         ))
+        .previewDisplayName("Detail View")
     }
 }
-
-// 辅助函数来格式化日期
-private func formatRelativeDate(_ dateString: String) -> String {
-     let formatter = ISO8601DateFormatter()
-     if let date = formatter.date(from: dateString) {
-         let calendar = Calendar.current
-         let now = Date()
-         
-         // 如果是今天
-         if calendar.isDateInToday(date) {
-             let diff = calendar.dateComponents([.hour, .minute], from: date, to: now)
-             if let hours = diff.hour, hours > 0 {
-                 return "\(hours)h ago"
-             } else if let minutes = diff.minute {
-                 return "\(max(minutes, 1))m ago"
-             }
-         }
-         
-         // 如果是昨天
-         if calendar.isDateInYesterday(date) {
-             return "Yesterday"
-         }
-         
-         // 如果是本周
-         let weekDiff = calendar.dateComponents([.weekOfYear], from: date, to: now)
-         if weekDiff.weekOfYear == 0 {
-             let dateFormatter = DateFormatter()
-             dateFormatter.dateFormat = "EEEE" // Full day name
-             return dateFormatter.string(from: date)
-         }
-         
-         // 其他情况
-         let dateFormatter = DateFormatter()
-         dateFormatter.dateStyle = .medium
-         dateFormatter.timeStyle = .none
-         return dateFormatter.string(from: date)
-     }
-     return dateString // 如果解析失败，返回原始字符串
- }
